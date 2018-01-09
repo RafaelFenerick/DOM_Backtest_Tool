@@ -1,143 +1,238 @@
 # -*- coding: utf-8 -*-
-from Execution_Time import *
+
 from Market_Structure import *
 
 class Player(ExpertPlayer):
 
-    def __init__(self):
+    '''Compras e vendas alternadas com sl e tp equidistantes'''
+
+    def __init__(self, volume):
 
         super(Player, self).__init__()
 
-        self.volume = 5
-        self.order_price = 0.0
+        self.volume = volume
         self.number = 1
+        self.trade_side = 1
+
+        self.previous_order = self.GetCleanToOpenOrder()
+        self.current_order = self.GetCleanToOpenOrder()
+
+    def CheckMatch(self):
+
+        return []
 
     def CheckModify(self):
-        '''Checar se alguma ordem deve ser modificada.'''
 
-        # Obter status da ordem atual
-        current_order_status = "none"
-        for order in self.history_orders:
-            if order["number"] == self.number - 1:
-                current_order_status = order["status"]
-
-        # Deletar ordem placed depois de determinado tempo
-        if current_order_status == "placed":
+        ## Deletar ordens enviadas e não consumidas em mais de 1 minuto
+        if self.current_order["status"] == "placed":
             if self.booktime - self.current_order_time > 60*1:
                 order = self.GetClearToModifyOrder()
-                order["number"] = self.number - 1
+                order["number"] = self.current_order["number"]
                 order["action"] = "delete"
-                return [order]
-
-        # Fechar ordem filled depois de determinado tempo
-        if current_order_status == "filled":
-            if self.booktime - self.current_order_time > 60*15:
-                order = self.GetClearToModifyOrder()
-                order["number"] = self.number - 1
-                order["action"] = "close"
                 return [order]
 
         return []
 
     def CheckOpen(self):
-        '''Checar se nova ordem deve ser aberta.'''
 
-        # Verificar se não há nenhuma ordem já posicionada
-        is_placed_order = False
-        for order in self.history_orders:
-            if order["status"] == "placed":
-                is_placed_order = True
-                break
-        if self.position["status"] != "none" or is_placed_order:
+        # Checar se já existe alguma ordem enviada
+        if self.current_order["status"] == "placed" or self.current_order["status"] == "filled":
             return []
 
-        # Entrar com ordem comprada
-        result = 1
-        self.order_price = self.bid - 0.5
+        # Alternar compra e venda
+        result = 1 if self.trade_side % 2 == 1 else -1
+        self.trade_side += 1
 
         new_order = self.GetCleanToOpenOrder()
-
-        # Preencher ordem de compra
         if result > 0:
             new_order["number"] = self.number
             new_order["type"] = "B"
             new_order["entry"] = "limit"
-            new_order["price"] = self.order_price
+            new_order["price"] = self.bid
             new_order["volume"] = self.volume
-            new_order["tp"] = self.order_price + 3.0
-            new_order["sl"] = self.order_price - 3.0
+            new_order["tp"] = self.bid + 2.5
+            new_order["sl"] = self.bid - 2.0
             self.current_order_time = self.booktime
             self.number += 1
+
             return [new_order]
 
-        # Preencher ordem de venda
         if result < 0:
             new_order["number"] = self.number
             new_order["type"] = "S"
             new_order["entry"] = "limit"
-            new_order["price"] = self.order_price
+            new_order["price"] = self.ask
             new_order["volume"] = self.volume
-            new_order["tp"] = self.order_price - 3.0
-            new_order["sl"] = self.order_price + 3.0
+            new_order["tp"] = self.ask - 2.5
+            new_order["sl"] = self.ask + 2.0
             self.current_order_time = self.booktime
             self.number += 1
+
             return [new_order]
 
         return []
 
     def Decisions(self):
-        '''Retorna decições tomadas pelo player sobre
-        modificação e abertura de ordens.'''
 
-        # --- Atualizar tempo da ordem quando consumida
-        # Obter status anterior
-        current_order_status = "none"
+        # Status atual
+        previous_order_number = 0
         for order in self.previous_history_orders:
-            if order["number"] == self.number - 1:
-                current_order_status = order["status"]
+            if order["status"] != "done" and order["status"] != "canceled":
+                previous_order_number = order["number"]
 
-        # Obter novo status
+        current_order_number = 0
         for order in self.history_orders:
-            if order["number"] == self.number - 1:
-                if current_order_status == "placed" and order["status"] == "filled":
-                    # Atualizar tempo
-                    self.current_order_time = self.booktime
+            if order["status"] != "done" and order["status"] != "canceled":
+                current_order_number = order["number"]
 
-        return self.CheckModify(), self.CheckOpen()
+        self.previous_order = self.GetOrder(previous_order_number, previous=True)
+        self.current_order = self.GetOrder(current_order_number)
 
-    def DisplayProduce(self):
-        '''Apresentar resultado das operações no dia.'''
+        return self.CheckMatch(), self.CheckModify(), self.CheckOpen()
 
-        # Custo por abertura e fechamento de ordem (por contrato)
-        single_cost = 7.5
+    def DisplayResult(self):
 
-        produce = 0.0
-        cost = 0.0
+        multiplicador = 50
+
+        # Obter posições
+        positions = {}
+        for order in self.history_orders:
+            if order["status"] == "done":
+                if abs(order["number"]) not in positions:
+                    positions[abs(order["number"])] = []
+                positions[abs(order["number"])].append(order)
+
+        ### Checar possíveis erros
+        for key in positions:
+            position = positions[key]
+            if len(position) != 2:
+                print "Position length error", position
+
+            if position[0]["type"] == position[1]["type"]:
+                print "Order types error"
+        ###
+
+        ### Cálculo de Retorno
+        gain = 0
+        loss = 0
+        gain_op = 0
+        loss_op = 0
+        positions_return = []
+        for key in positions:
+            position = positions[key]
+            if position[0]["type"] == "B":
+                sell = position[1]["price"]*position[1]["volume"]
+                buy = position[0]["price"]*position[0]["volume"]
+            else:
+                sell = position[0]["price"] * position[0]["volume"]
+                buy = position[1]["price"] * position[1]["volume"]
+
+            return_ = multiplicador * (sell - buy)
+            positions_return.append(return_)
+
+            if return_ >= 0:
+                gain += return_
+                gain_op += 1
+            else:
+                loss += -return_
+                loss_op += 1
+        ###
+
+        ### Cálculo de Retorno 2 para checagem de erro
+        total = 0.0
         buy_orders = 0
         sell_orders = 0
         for order in self.history_orders:
             if order["status"] == "done":
                 if order["type"] == "B":
-                    produce -= order["price"]*order["volume"]
-                    cost += order["volume"]*single_cost
+                    total -= order["price"] * order["volume"] * multiplicador
                     buy_orders += 1
                 if order["type"] == "S":
-                    produce += order["price"]*order["volume"]
-                    cost += order["volume"] * single_cost
+                    total += order["price"] * order["volume"] * multiplicador
                     sell_orders += 1
+        ###
 
-        # Cada tick no DOL corresponde a R$50,00 por contrato
-        produce *= 50
+        if total != sum(positions_return):
+            print "########## Erro de resultado 1"
 
-        # Checagem de erros
+        if buy_orders != len(positions_return):
+            print "########## Erro de resultado 2"
+
         if buy_orders != sell_orders:
-            print "Error - DisplayProduce - different amount of orders"
+            print "########## Erro de resultado 3"
 
-        print "Total de Operações:", buy_orders
-        print "Resultado Bruto:   ", round(produce, 2)
-        print "Resultado Liquido: ", round(produce - cost, 2)
+        if buy_orders != gain_op + loss_op:
+            print "########## Erro de resultado 4"
+
+        if total != gain - loss:
+            print "########## Erro de resultado 5"
+
+        print "\n"
+        print "Total de Operações:            ", gain_op + loss_op
+        print "Total de operações positivas:  ", gain_op
+        print "Total de operações negativas:  ", loss_op
+        if gain_op + loss != 0:
+            print "Taxa de Acerto:                ", round(gain_op / float(gain_op + loss_op), 2)
+        print "Lucro:                         ", gain
+        print "Perda:                         ", loss
+        if loss != 0:
+            print "Fator de Lucro:                ", round(gain / float(loss), 2)
+        print "Saldo Final (sem custos):      ", round((gain - loss), 2)
+        print "Saldo Final (sem corretagem):  ", round((gain - loss) - self.volume * 2 * custo * (gain_op + loss_op), 2)
+        print "Saldo Final (com custos):      ", round((gain - loss) - self.volume * 2 * (custo + corretagem) * (gain_op + loss_op), 2)
+
+        global a, b, c, d
+
+        a += gain_op
+        b += loss_op
+        c += gain
+        d += loss
+
+        file = open("General_Player_Operations_Result.txt", "w")
+        for order in self.history_orders:
+            file.write(str(order["number"]))
+            for key in order:
+                if key != "number":
+                    file.write("," + str(order[key]))
+            file.write("\n")
+        file.close()
+
+days = ["5#10"]
+ativo = "dol"
 
 Init_Execution(0)
-takeprofit = Player()
-RunBacktest("5_10_2017", takeprofit)
+
+a = 0
+b = 0
+c = 0
+d = 0
+
+corretagem = 5
+custo = 2.5
+volume = 5
+
+for day in days:
+    print day
+    general_player = Player(5)
+    if not RunSimulator(day, ativo, 5, 0.5, general_player):
+        print "RunSimulator ERROR!!!"
+        del general_player
+        break
+    del general_player
+
+    print "\n"
+
+print "Total de Operações:            ", a + b
+print "Total de operações positivas:  ", a
+print "Total de operações negativas:  ", b
+if a + b != 0:
+    print "Taxa de Acerto:                ", round(a / float(a + b), 2)
+print "Lucro:                         ", c
+print "Perda:                         ", d
+if d != 0:
+    print "Fator de Lucro:                ", round(c / float(d), 2)
+print "Saldo Final (sem custos):      ", round((c-d), 2)
+print "Saldo Final (sem corretagem):  ", round((c-d) - 2 * volume * custo * (a + b), 2)
+print "Saldo Final (com custos):      ", round((c-d) - 2 * volume * (custo + corretagem) * (a + b), 2)
+
 End_Execution(0)

@@ -20,12 +20,16 @@ def End_Execution(magic_number, printt=True):
     global register
 
     current_time = time()
+    exec_time = 0.0
     if magic_number not in register:
         print "Magic Number doesn't exists!!!"
     else:
+        exec_time = current_time - register[magic_number]
         if printt:
-            print "Execution time from(" + str(magic_number) + "):", round(current_time - register[magic_number], 2)
+            print "Execution time from(" + str(magic_number) + "):", round(exec_time, 2)
 
     del register[magic_number]
+
+    return exec_time
 
 register = {}
